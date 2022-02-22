@@ -1,0 +1,48 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-ha-headless
+  namespace: default
+  labels:
+    app: redis
+    type: ha
+    role: node
+spec:
+  type: ClusterIP
+  clusterIP: None
+  publishNotReadyAddresses: true
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+    - name: sentinel
+      port: 26379
+      targetPort: sentinel
+  selector:
+    app: redis
+    type: ha
+    role: node
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-ha
+  namespace: default
+  labels:
+    app: redis
+    type: ha
+    role: node
+spec:
+  type: ClusterIP
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+    - name: sentinel
+      port: 26379
+      targetPort: sentinel
+  selector:
+    app: redis
+    type: ha
+    role: node
