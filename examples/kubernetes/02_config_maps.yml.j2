@@ -1,0 +1,69 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-ha-global
+  namespace: default
+  labels:
+    app: redis
+    type: ha
+data:
+  FAILOVER_GRACE_PERIOD_SECONDS: "50" # lower than terminationGracePeriodSeconds
+  REDIS_HEADLESS_SERVICE: "redis-ha-headless.default.svc.cluster.local"
+  REDIS_MASTER_GROUP: "redis-master"
+  REDIS_PORT: "6379"
+  REDIS_SERVICE: "redis-ha.default.svc.cluster.local"
+  SENTINEL_PORT: "26379"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-ha-configuration
+  namespace: default
+  labels:
+    app: redis
+    type: ha
+data:
+  redis.conf: |-
+    # Allow all connections
+    bind 0.0.0.0
+
+    # Disable protected mode
+    protected-mode no
+
+    maxmemory 1800mb
+
+    # Evict least recently used keys first
+    maxmemory-policy noeviction
+
+    # Disconnect clients that are idle for > 300 seconds
+    timeout 300
+
+    # Increase replication timeout (from 60s default)
+    repl-timeout 1200
+
+    # Enable append-only-file mode
+    appendonly yes
+    appendfsync everysec
+
+    # Ensure append-only-file is rewritten often to reduce mean time to recovery
+    auto-aof-rewrite-percentage 5
+    auto-aof-rewrite-min-size 32mb
+
+    # Use the RDB snapshot as a preamble to reduce mean time to recovery
+    aof-use-rdb-preamble yes
+
+    # Enable snapshotting
+    save 900 1
+    save 300 10
+    save 60 10000
+
+    # Allow writes to replicas
+    replica-read-only no
+  sentinel.conf: |-
+    dir /tmp
+    port 26379
+
+    sentinel down-after-milliseconds redis-master 15000
+    sentinel failover-timeout redis-master 30000
+    sentinel parallel-syncs redis-master 1

@@ -1,0 +1,250 @@
+---
+apiVersion: policy/v1beta1
+kind: PodDisruptionBudget
+metadata:
+  name: redis-ha-node
+  namespace: default
+  labels:
+    app: redis
+    type: ha
+    role: node
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: redis
+      type: ha
+      role: node
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-ha-node
+  namespace: default
+  labels:
+    app: redis
+    type: ha
+    role: node
+spec:
+  serviceName: redis-ha-headless
+  replicas: 3
+  selector:
+    matchLabels:
+      app: redis
+      type: ha
+      role: node
+  updateStrategy:
+    type: OnDelete
+  template:
+    metadata:
+      labels:
+        app: redis
+        type: ha
+        role: node
+      annotations:
+        prometheus.io/port: "9121"
+        prometheus.io/scrape: "true"
+    spec:
+      enableServiceLinks: false
+      serviceAccountName: redis-ha
+      securityContext:
+        fsGroup: 999
+      nodeSelector:
+        zappi/role: general-stateful
+      tolerations:
+        - key: zappi/dedicated
+          value: general-stateful
+          effect: NoSchedule
+          operator: Equal
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - redis
+                  - key: type
+                    operator: In
+                    values:
+                      - ha
+                  - key: role
+                    operator: In
+                    values:
+                      - node
+              topologyKey: failure-domain.beta.kubernetes.io/zone
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: redis
+          image: zappi/redis:6.2.6
+          command:
+            - /bin/bash
+          args:
+            - -c
+            - /opt/redis/scripts/start_node.sh
+          envFrom:
+            - configMapRef:
+                name: redis-ha-global
+          ports:
+            - name: redis
+              containerPort: 6379
+          livenessProbe:
+            initialDelaySeconds: 300
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 5
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - /opt/redis/scripts/ping_liveness_local.sh
+          readinessProbe:
+            initialDelaySeconds: 30
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 5
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - /opt/redis/scripts/ping_readiness_local.sh
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/bash
+                  - -c
+                  - /opt/redis/scripts/prestop_redis.sh > /proc/1/fd/1
+          resources:
+            requests:
+              memory: 4Gi
+              cpu: 10m
+            limits:
+              memory: 4Gi
+              cpu: 300m
+          securityContext:
+            capabilities:
+              drop:
+                - ALL
+            runAsUser: 999
+            runAsGroup: 999
+            runAsNonRoot: true
+          volumeMounts:
+            - name: redis-data
+              mountPath: /data
+            - name: redis-config
+              mountPath: /opt/redis/mounted/etc
+            - name: redis-runtime-config
+              mountPath: /opt/redis/etc
+        - name: sentinel
+          image: zappi/redis:6.2.6
+          command:
+            - /bin/bash
+          args:
+            - -c
+            - /opt/redis/scripts/start_sentinel.sh
+          envFrom:
+            - configMapRef:
+                name: redis-ha-global
+          ports:
+            - name: sentinel
+              containerPort: 26379
+          livenessProbe:
+            initialDelaySeconds: 30
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 5
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - /opt/redis/scripts/ping_sentinel.sh
+          readinessProbe:
+            initialDelaySeconds: 30
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 5
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - /opt/redis/scripts/ping_sentinel.sh
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/bash
+                  - -c
+                  - /opt/redis/scripts/prestop_sentinel.sh > /proc/1/fd/1
+          resources:
+            limits: {}
+            requests: {}
+          securityContext:
+            capabilities:
+              drop:
+                - ALL
+            runAsUser: 999
+            runAsGroup: 999
+            runAsNonRoot: true
+          volumeMounts:
+            - name: redis-config
+              mountPath: /opt/redis/mounted/etc
+            - name: sentinel-runtime-config
+              mountPath: /opt/redis/etc
+            - name: tmp
+              mountPath: /tmp
+        - name: redis-exporter
+          image: oliver006/redis_exporter:v1.35.0
+          args:
+            - -redis.addr=redis://localhost:6379
+          ports:
+            - name: metrics
+              containerPort: 9121
+          securityContext:
+            capabilities:
+              drop:
+                - ALL
+            runAsUser: 59000
+            runAsGroup: 59000
+            runAsNonRoot: true
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 9121
+            initialDelaySeconds: 30
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 9121
+            initialDelaySeconds: 30
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 5
+          resources:
+            limits: {}
+            requests: {}
+      volumes:
+        - name: redis-config
+          configMap:
+            name: redis-ha-configuration
+        - name: sentinel-runtime-config
+          emptyDir: {}
+        - name: redis-runtime-config
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: redis-data
+        namespace: default
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 12Gi
+        storageClassName: ebs-gp2
